@@ -36,6 +36,13 @@ const STATUS = {
   xong: { label: "Hoàn thành", color: "#10b981" },
   tre:  { label: "Trễ hạn", color: "#ef4444" }
 };
+const PLAN_STATUS = {
+  cho:    { label: "Chờ duyệt", color: "#f59e0b", icon: "⏳" },
+  duyet:  { label: "Đã duyệt", color: "#10b981", icon: "✅" },
+  sua:    { label: "Cần sửa", color: "#3b82f6", icon: "✏️" },
+  tuchoi: { label: "Từ chối", color: "#ef4444", icon: "❌" }
+};
+const PLAN_PERIODS = { tuan: "Kế hoạch tuần", thang: "Kế hoạch tháng", quy: "Kế hoạch quý", khac: "Khác" };
 
 async function dbLoad(key) {
   const snap = await getDoc(doc(db, "data", key));
@@ -127,7 +134,7 @@ function Login({ onLogin }) {
 function TrainerApp({ session, onLogout }) {
   const [tab, setTab] = useState("tasks");
   const [company, setCompany] = useState(session.company);
-  const tabs = [{ id: "tasks", icon: "📋", label: "Nhiệm vụ" }, { id: "scores", icon: "⭐", label: "Đánh giá" }, { id: "lessons", icon: "📚", label: "Bài học" }];
+  const tabs = [{ id: "tasks", icon: "📋", label: "Nhiệm vụ" }, { id: "plans", icon: "🗂️", label: "Duyệt kế hoạch" }, { id: "scores", icon: "⭐", label: "Đánh giá" }, { id: "lessons", icon: "📚", label: "Bài học" }];
   return (
     <div style={{ minHeight: "100vh", background: "#f8fafc" }}>
       <div style={{ background: "#fff", borderBottom: "1px solid #e2e8f0", padding: "12px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -149,6 +156,7 @@ function TrainerApp({ session, onLogout }) {
       </div>
       <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
         {tab === "tasks" && <TasksManager company={company} isTrainer />}
+        {tab === "plans" && <PlansManager company={company} isTrainer />}
         {tab === "scores" && <ScoresManager company={company} />}
         {tab === "lessons" && <LessonsManager />}
       </div>
@@ -231,6 +239,118 @@ function TasksManager({ company, isTrainer, member: filterMember }) {
               </div>
             </Card>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlansManager({ company, isTrainer, member }) {
+  const [plans, setPlans] = useState([]); const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false); const [filter, setFilter] = useState("all");
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState({ title: "", period: "tuan", content: "", deadline: "" });
+  const [feedbacks, setFeedbacks] = useState({});
+  const companyData = COMPANIES[company];
+  useEffect(() => {
+    setLoading(true);
+    const q = query(collection(db, `plans_${company}`), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(q, snap => { setPlans(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); });
+    return unsub;
+  }, [company]);
+  function resetForm() { setForm({ title: "", period: "tuan", content: "", deadline: "" }); setShowForm(false); setEditingId(null); }
+  async function submitPlan() {
+    if (!form.title || !form.content) return;
+    if (editingId) {
+      await setDoc(doc(db, `plans_${company}`, editingId), { ...form, status: "cho", feedback: "", updatedAt: Date.now() }, { merge: true });
+    } else {
+      await addDoc(collection(db, `plans_${company}`), { ...form, member, status: "cho", feedback: "", createdAt: Date.now() });
+    }
+    resetForm();
+  }
+  function startEdit(plan) {
+    setForm({ title: plan.title, period: plan.period || "tuan", content: plan.content, deadline: plan.deadline || "" });
+    setEditingId(plan.id); setShowForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  async function deletePlan(id) { if (!window.confirm("Xóa kế hoạch này?")) return; await deleteDoc(doc(db, `plans_${company}`, id)); }
+  async function review(id, status) {
+    await setDoc(doc(db, `plans_${company}`, id), { status, feedback: feedbacks[id] || "", reviewedAt: Date.now() }, { merge: true });
+    setFeedbacks(prev => ({ ...prev, [id]: "" }));
+  }
+  let filtered = plans;
+  if (member) filtered = filtered.filter(p => p.member === member);
+  if (filter !== "all") filtered = filtered.filter(p => p.status === filter);
+  const pendingCount = plans.filter(p => p.status === "cho" && (!member || p.member === member)).length;
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+        <H1>{isTrainer ? `${companyData?.label} — Duyệt kế hoạch` : "🗂️ Kế hoạch của tôi"}{pendingCount > 0 && <span style={{ marginLeft: 10, fontSize: 13, fontWeight: 700, color: "#f59e0b" }}>({pendingCount} chờ duyệt)</span>}</H1>
+        {!isTrainer && <Btn onClick={() => { if (showForm) resetForm(); else setShowForm(true); }} color="#10b981">{showForm ? "Đóng form" : "+ Nộp kế hoạch"}</Btn>}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {["all", ...Object.keys(PLAN_STATUS)].map(s => (
+          <button key={s} onClick={() => setFilter(s)} style={{ padding: "5px 14px", borderRadius: 99, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, background: filter === s ? (s === "all" ? "#3b82f6" : PLAN_STATUS[s]?.color) : "#f1f5f9", color: filter === s ? "#fff" : "#64748b" }}>
+            {s === "all" ? "Tất cả" : PLAN_STATUS[s].label}
+          </button>
+        ))}
+      </div>
+      {!isTrainer && showForm && (
+        <Card style={{ borderLeft: "4px solid #10b981" }}>
+          <h3 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700 }}>{editingId ? "Sửa & nộp lại kế hoạch" : "Nộp kế hoạch mới"}</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div style={{ gridColumn: "1/-1" }}><label style={labelStyle}>Tiêu đề *</label><input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="VD: Kế hoạch kinh doanh tuần 33..." style={inputStyle} /></div>
+            <div><label style={labelStyle}>Kỳ kế hoạch</label><select value={form.period} onChange={e => setForm({...form, period: e.target.value})} style={inputStyle}>{Object.entries(PLAN_PERIODS).map(([k,v]) => <option key={k} value={k}>{v}</option>)}</select></div>
+            <div><label style={labelStyle}>Hạn hoàn thành</label><input type="date" value={form.deadline} onChange={e => setForm({...form, deadline: e.target.value})} style={inputStyle} /></div>
+            <div style={{ gridColumn: "1/-1" }}><label style={labelStyle}>Nội dung kế hoạch *</label><textarea value={form.content} onChange={e => setForm({...form, content: e.target.value})} placeholder={"Liệt kê các đầu việc, mục tiêu, con số cần đạt...\nVD:\n1. Chốt 20 đơn livestream\n2. Đào tạo 2 nhân viên mới..."} rows={7} style={{ ...inputStyle, resize: "vertical" }} /></div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}><Btn onClick={submitPlan} color="#10b981">{editingId ? "Nộp lại cho Huế duyệt" : "Nộp kế hoạch"}</Btn><Btn onClick={resetForm} variant="ghost">Huỷ</Btn></div>
+        </Card>
+      )}
+      {loading ? <Empty text="Đang tải..." /> : filtered.length === 0 ? <Empty text={isTrainer ? "Chưa có kế hoạch nào được nộp" : "Bạn chưa có kế hoạch nào. Bấm + Nộp kế hoạch để bắt đầu."} /> : (
+        <div>
+          {filtered.map(plan => {
+            const st = PLAN_STATUS[plan.status] || PLAN_STATUS.cho;
+            return (
+              <Card key={plan.id} style={{ borderLeft: `4px solid ${st.color}` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 700, fontSize: 15, color: "#1e293b" }}>{st.icon} {plan.title}</span>
+                  <Tag text={st.label} color={st.color + "20"} textColor={st.color} />
+                  {plan.period && <Tag text={PLAN_PERIODS[plan.period] || plan.period} />}
+                </div>
+                <div style={{ display: "flex", gap: 16, fontSize: 12, color: "#94a3b8", marginBottom: 10, flexWrap: "wrap" }}>
+                  {plan.member && <span>👤 {plan.member}</span>}
+                  {plan.deadline && <span>📅 Hạn: {plan.deadline}</span>}
+                  {plan.createdAt && <span>🕐 Nộp: {new Date(plan.createdAt).toLocaleDateString("vi-VN")}</span>}
+                  {plan.updatedAt && <span>🔄 Nộp lại: {new Date(plan.updatedAt).toLocaleDateString("vi-VN")}</span>}
+                </div>
+                <div style={{ background: "#f8fafc", borderRadius: 10, padding: 14, fontSize: 13, lineHeight: 1.7, color: "#374151", whiteSpace: "pre-wrap", marginBottom: 10 }}>{plan.content}</div>
+                {plan.feedback && (
+                  <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "10px 14px", fontSize: 13, color: "#92400e", marginBottom: 10 }}>
+                    <b>💬 Nhận xét của Huế:</b> {plan.feedback}
+                  </div>
+                )}
+                {isTrainer ? (
+                  <div>
+                    <textarea value={feedbacks[plan.id] || ""} onChange={e => setFeedbacks({...feedbacks, [plan.id]: e.target.value})} placeholder="Nhận xét / yêu cầu chỉnh sửa (tuỳ chọn)..." rows={2} style={{ ...inputStyle, resize: "vertical", marginBottom: 8 }} />
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <Btn onClick={() => review(plan.id, "duyet")} color="#10b981" small disabled={plan.status === "duyet"}>✅ Duyệt</Btn>
+                      <Btn onClick={() => review(plan.id, "sua")} color="#3b82f6" small disabled={plan.status === "sua"}>✏️ Yêu cầu sửa</Btn>
+                      <Btn onClick={() => review(plan.id, "tuchoi")} color="#ef4444" small disabled={plan.status === "tuchoi"}>❌ Từ chối</Btn>
+                      <Btn onClick={() => deletePlan(plan.id)} variant="danger" small>Xóa</Btn>
+                    </div>
+                  </div>
+                ) : (
+                  (plan.status === "cho" || plan.status === "sua" || plan.status === "tuchoi") && (
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <Btn onClick={() => startEdit(plan)} color="#3b82f6" small>✏️ {plan.status === "cho" ? "Sửa" : "Sửa & nộp lại"}</Btn>
+                      {plan.status === "cho" && <Btn onClick={() => deletePlan(plan.id)} variant="danger" small>Xóa</Btn>}
+                    </div>
+                  )
+                )}
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>
@@ -365,7 +485,7 @@ function LessonsManager() {
 
 function StudentApp({ session, onLogout }) {
   const [tab, setTab] = useState("tasks");
-  const tabs = [{ id: "tasks", icon: "📋", label: "Nhiệm vụ" }, { id: "lessons", icon: "📚", label: "Bài học" }, { id: "scores", icon: "⭐", label: "Điểm của tôi" }];
+  const tabs = [{ id: "tasks", icon: "📋", label: "Nhiệm vụ" }, { id: "plans", icon: "🗂️", label: "Kế hoạch" }, { id: "lessons", icon: "📚", label: "Bài học" }, { id: "scores", icon: "⭐", label: "Điểm của tôi" }];
   return (
     <div style={{ minHeight: "100vh", background: "#f8fafc" }}>
       <div style={{ background: "#fff", borderBottom: "1px solid #e2e8f0", padding: "12px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -382,6 +502,7 @@ function StudentApp({ session, onLogout }) {
       </div>
       <div style={{ padding: 24, maxWidth: 800, margin: "0 auto" }}>
         {tab === "tasks" && <TasksManager company={session.company} member={session.member} isTrainer={false} />}
+        {tab === "plans" && <PlansManager company={session.company} member={session.member} isTrainer={false} />}
         {tab === "lessons" && <LessonsViewer />}
         {tab === "scores" && <MyScores session={session} />}
       </div>
@@ -522,4 +643,4 @@ export default function App() {
   if (!session) return <Login onLogin={handleLogin} />;
   if (session.role === "trainer") return <TrainerApp session={session} onLogout={handleLogout} />;
   return <StudentApp session={session} onLogout={handleLogout} />;
-                                                                                                                                                                               }
+}
